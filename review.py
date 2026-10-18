@@ -37,7 +37,8 @@ def send(method, url, payload=None, accept="application/vnd.github+json"):
     """Small HTTP helper. Returns (status_code, response_text)."""
     data = json.dumps(payload).encode() if payload is not None else None
     headers = {"Authorization": "Bearer " + TOKEN, "Accept": accept,
-               "Content-Type": "application/json", "User-Agent": "ai-pr-reviewer"}
+               "Content-Type": "application/json", "User-Agent": "ai-pr-reviewer",
+               "Accept-Encoding": "identity"}
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
         with urllib.request.urlopen(req, timeout=90) as resp:
@@ -123,15 +124,20 @@ def ask_model(diff_text):
                "messages": [{"role": "system", "content": PROMPT},
                             {"role": "user", "content": diff_text}]}
     for attempt in range(4):
-        status, body = send("POST", LLM_URL, payload)
-        if status in (429, 500, 502, 503):  # busy: wait and retry
-            print("Model busy (%d), retrying..." % status)
+        status, body = send("POST", LLM_URL, payload, accept="application/json")
+        if status in (429, 500, 502, 503) or (status == 200 and not body.strip()):
+            print("Model busy or empty reply (%d), retrying..." % status)
             time.sleep(2 * 2 ** attempt)
             continue
         if status != 200:
             print("Model error %d: %s" % (status, body[:500]))
             sys.exit(1)
-        return parse_answer(json.loads(body)["choices"][0]["message"]["content"])
+        try:
+            reply = json.loads(body)["choices"][0]["message"]["content"]
+        except (ValueError, KeyError, IndexError, TypeError):
+            print("Unexpected reply from the model (status %d): %r" % (status, body[:500]))
+            sys.exit(1)
+        return parse_answer(reply)
     print("Model kept failing, giving up.")
     sys.exit(1)
 
